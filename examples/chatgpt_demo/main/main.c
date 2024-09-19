@@ -13,7 +13,6 @@
 #include "esp_check.h"
 #include "nvs_flash.h"
 #include "app_ui_ctrl.h"
-#include "OpenAI.h"
 #include "audio_player.h"
 #include "app_sr.h"
 #include "bsp/esp-bsp.h"
@@ -33,149 +32,19 @@ static char *TAG = "app_main";
 static sys_param_t *sys_param = NULL;
 
 /* program flow. This function is called in app_audio.c */
-esp_err_t start_openai(uint8_t *audio, int audio_len)
+esp_err_t start_answer(uint8_t *audio, int audio_len)
 {
     esp_err_t ret = ESP_OK;
-    static OpenAI_t *openai = NULL;
-    static OpenAI_AudioTranscription_t *audioTranscription = NULL;
-    static OpenAI_ChatCompletion_t *chatCompletion = NULL;
-    static OpenAI_AudioSpeech_t *audioSpeech = NULL;
-
-    OpenAI_SpeechResponse_t *speechresult = NULL;
-    OpenAI_StringResponse_t *result = NULL;
-    FILE *fp = NULL;
-
-    if (openai == NULL) {
-        openai = OpenAICreate(sys_param->key);
-        ESP_RETURN_ON_FALSE(NULL != openai, ESP_ERR_INVALID_ARG, TAG, "OpenAICreate faield");
-
-        OpenAIChangeBaseURL(openai, sys_param->url);
-
-        audioTranscription = openai->audioTranscriptionCreate(openai);
-        chatCompletion = openai->chatCreate(openai);
-        audioSpeech = openai->audioSpeechCreate(openai);
-
-        audioTranscription->setResponseFormat(audioTranscription, OPENAI_AUDIO_RESPONSE_FORMAT_JSON);
-        audioTranscription->setLanguage(audioTranscription, "en");
-        audioTranscription->setTemperature(audioTranscription, 0.2);
-
-        chatCompletion->setModel(chatCompletion, "gpt-3.5-turbo");
-        chatCompletion->setSystem(chatCompletion, "user");
-        chatCompletion->setMaxTokens(chatCompletion, CONFIG_MAX_TOKEN);
-        chatCompletion->setTemperature(chatCompletion, 0.2);
-        chatCompletion->setStop(chatCompletion, "\r");
-        chatCompletion->setPresencePenalty(chatCompletion, 0);
-        chatCompletion->setFrequencyPenalty(chatCompletion, 0);
-        chatCompletion->setUser(chatCompletion, "OpenAI-ESP32");
-
-        audioSpeech->setModel(audioSpeech, "tts-1");
-        audioSpeech->setVoice(audioSpeech, "nova");
-        audioSpeech->setResponseFormat(audioSpeech, OPENAI_AUDIO_OUTPUT_FORMAT_MP3);
-        audioSpeech->setSpeed(audioSpeech, 1.0);
-    }
 
     ui_ctrl_show_panel(UI_CTRL_PANEL_GET, 0);
 
-    // OpenAI Audio Transcription
-    char *text = audioTranscription->file(audioTranscription, (uint8_t *)audio, audio_len, OPENAI_AUDIO_INPUT_FORMAT_WAV);
-
-    if (NULL == text) {
-        ret = ESP_ERR_INVALID_RESPONSE;
-        ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, INVALID_REQUEST_ERROR);
-        ESP_GOTO_ON_ERROR(ret, err, TAG, "[audioTranscription]: invalid url");
-    }
-
-    if (strstr(text, "\"code\": ")) {
-        ret = ESP_ERR_INVALID_RESPONSE;
-        ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, text);
-        ESP_GOTO_ON_ERROR(ret, err, TAG, "[audioTranscription]: invalid response");
-    }
-
-    if (strcmp(text, INVALID_REQUEST_ERROR) == 0 || strcmp(text, SERVER_ERROR) == 0) {
-        ret = ESP_ERR_INVALID_RESPONSE;
-        ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, SORRY_CANNOT_UNDERSTAND);
-        ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, LISTEN_SPEAK_PANEL_DELAY_MS);
-        ESP_GOTO_ON_ERROR(ret, err, TAG, "[audioTranscription]: invalid response");
-    }
-
     // UI listen success
-    ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_QUESTION, text);
-    ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, text);
+    ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_QUESTION, "介绍一下你自己");
+    // ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, "Answer");
 
-    // OpenAI Chat Completion
-    result = chatCompletion->message(chatCompletion, text, false);
-    if (NULL == result) {
-        ret = ESP_ERR_INVALID_RESPONSE;
-        ESP_GOTO_ON_ERROR(ret, err, TAG, "[chatCompletion]: invalid response");
-    }
-
-    char *response = result->getData(result, 0);
-
-    if (response != NULL && (strcmp(response, INVALID_REQUEST_ERROR) == 0 || strcmp(response, SERVER_ERROR) == 0)) {
-        // UI listen fail
-        ret = ESP_ERR_INVALID_RESPONSE;
-        ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, SORRY_CANNOT_UNDERSTAND);
-        ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, LISTEN_SPEAK_PANEL_DELAY_MS);
-        ESP_GOTO_ON_ERROR(ret, err, TAG, "[chatCompletion]: invalid response");
-    }
-
-    // UI listen success
-    ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_QUESTION, text);
-    ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, response);
-
-    if (strcmp(response, INVALID_REQUEST_ERROR) == 0) {
-        ret = ESP_ERR_INVALID_RESPONSE;
-        ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, SORRY_CANNOT_UNDERSTAND);
-        ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, LISTEN_SPEAK_PANEL_DELAY_MS);
-        ESP_GOTO_ON_ERROR(ret, err, TAG, "[chatCompletion]: invalid response");
-    }
-
-    ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_CONTENT, response);
+    ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_CONTENT, "如果您不记得某个特定的国际规则、国际贸易实践或者是其他细节，通常可以通过以下步骤来获取信息：1. **回顾相关领域**：如果该信息与你的日常生活或者专业领域相关，你可能曾在学习或工作中接触过。2. **查找权威资料**：例如教科书、学术论文、官方文件等。这些地方通常会包含较为全面和准确的国际 规则信息。3. **咨询专业人士**：如果你是学生或者在职的专业人士，可以向你的老师、导师或者同行请教。请根据具体情境选择合适的方法获取所需信息。");
     ui_ctrl_show_panel(UI_CTRL_PANEL_REPLY, 0);
 
-    // OpenAI Speech Response
-    speechresult = audioSpeech->speech(audioSpeech, response);
-    if (NULL == speechresult) {
-        ret = ESP_ERR_INVALID_RESPONSE;
-        ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, 5 * LISTEN_SPEAK_PANEL_DELAY_MS);
-        fp = fopen("/spiffs/tts_failed.mp3", "r");
-        if (fp) {
-            audio_player_play(fp);
-        }
-        ESP_GOTO_ON_ERROR(ret, err, TAG, "[audioSpeech]: invalid response");
-    }
-
-    uint32_t dataLength = speechresult->getLen(speechresult);
-    char *speechptr = speechresult->getData(speechresult);
-    esp_err_t status = ESP_FAIL;
-    fp = fmemopen((void *)speechptr, dataLength, "rb");
-    if (fp) {
-        status = audio_player_play(fp);
-    }
-
-    if (status != ESP_OK) {
-        ESP_LOGE(TAG, "Error creating ChatGPT request: %s\n", esp_err_to_name(status));
-        // UI reply audio fail
-        ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, 0);
-    } else {
-        // Wait a moment before starting to scroll the reply content
-        vTaskDelay(pdMS_TO_TICKS(SCROLL_START_DELAY_S * 1000));
-        ui_ctrl_reply_set_audio_start_flag(true);
-    }
-
-err:
-    // Clearing resources
-    if (speechresult) {
-        speechresult->deleteResponse (speechresult);
-    }
-
-    if (result) {
-        result->deleteResponse (result);
-    }
-
-    if (text) {
-        free(text);
-    }
     return ret;
 }
 
