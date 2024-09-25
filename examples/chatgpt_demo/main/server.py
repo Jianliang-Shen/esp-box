@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, send_file
 import os
-from ollama import Client
+import ollama
 import requests
 import torch
 import torchaudio
@@ -12,6 +12,16 @@ import requests
 import torch
 import torchaudio
 import numpy as np
+
+import ffmpeg
+
+def convert_wav(input_file, output_file):
+    try:
+        # 使用ffmpeg将WAV文件转换为指定参数
+        ffmpeg.input(input_file).output(output_file, ar=16000, ac=2, sample_fmt='s16').run()
+        print(f"Successfully converted {input_file} to {output_file}")
+    except ffmpeg.Error as e:
+        print(f"Error occurred: {e.stderr.decode()}")
 
 
 messages = []
@@ -35,9 +45,9 @@ def send_to_cosyvoice(txt):
     tts_speech = torch.from_numpy(np.array(np.frombuffer(tts_audio, dtype=np.int16))).unsqueeze(dim=0)
 
     torchaudio.save(f"{script_dir}/demo.wav", tts_speech, target_sr)
-    wave_obj = sa.WaveObject.from_wave_file(f"{script_dir}/demo.wav")
-    play_obj = wave_obj.play()
-    play_obj.wait_done()
+    # wave_obj = sa.WaveObject.from_wave_file(f"{script_dir}/demo.wav")
+    # play_obj = wave_obj.play()
+    # play_obj.wait_done()
 
 @app.route('/upload', methods=['POST'])
 def upload_audio():
@@ -48,7 +58,7 @@ def upload_audio():
         return "No data received", 400
 
     # 将块写入文件
-    with open("received_audio.wav", "ab") as f:  # 使用追加模式写入
+    with open(f"{script_dir}/received_audio.wav", "ab") as f:  # 使用追加模式写入
         f.write(chunk_data)
 
     return "Chunk received", 200
@@ -76,9 +86,8 @@ def get_response2():
 
     messages.append({'role': 'user', 'content': prompt})
 
-    client = Client(host='http://localhost:11434')
-    # stream = client.chat(model='llama3.1', messages=messages, stream=True)
-    stream = client.chat(model='llama3.1', messages=messages)
+    client = ollama.Client(host='http://localhost:11434')
+    stream = client.chat(model='assistant', messages=messages)
     print("[ OK ] Connect ollama")
 
     assistant_log = stream['message']['content']
@@ -97,7 +106,7 @@ def get_response2():
 
     return assistant_log, 200
 
-@app.route('/get_wav', methods=['GET'])
+@app.route('/get_mp3', methods=['GET'])
 def get_wav():
     with open(f'{script_dir}/ollama_result.txt', 'r', encoding='utf-8') as file:
         tts_txt = file.read()
@@ -105,10 +114,28 @@ def get_wav():
 
     send_to_cosyvoice(tts_txt)
 
-    # return send_file('demo.wav', mimetype='audio/wav')
-    return 0
+    audio_file_path = f"{script_dir}/demo.wav"
+
+    # 检查文件是否存在
+    if not os.path.exists(audio_file_path):
+        return jsonify({"error": "Audio file not found!"}), 404
+
+    if os.path.exists(f'{script_dir}/output.wav'):
+        os.remove(f'{script_dir}/output.wav')
+
+    convert_wav(audio_file_path, f'{script_dir}/output.wav')
+
+    return send_file(f'{script_dir}/output.wav', mimetype='audio/wav')
 
 if __name__ == '__main__':
+    modelfile='''
+    FROM llama3.1
+    SYSTEM 你是一个语音助手，回复必须不超过二十个字，如果用户让你讲一个很长的故事，你会回答用户，"对不起，我无法生成长文字"
+    '''
+
+    ollama.create(model='assistant', modelfile=modelfile)
+    print("[ OK ] Create Ollama assistant model and set system prompt")
+    
     print("Starting Flask server...")
     app.run(host='0.0.0.0', port=5000, debug=True)
     print("Flask server started")

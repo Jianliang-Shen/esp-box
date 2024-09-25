@@ -34,9 +34,74 @@
 static char *TAG = "app_main";
 static sys_param_t *sys_param = NULL;
 
-#define MAX_HTTP_OUTPUT_BUFFER (1024)
 #define CHUNK_SIZE 10240 // 每次上传的音频块大小
+#define MAX_HTTP_OUTPUT_BUFFER (1024 * 20)
 static char http_response[MAX_HTTP_OUTPUT_BUFFER];
+#define AUDIO_FILE_PATH  "/spiffs/result.wav"                                                                                               \
+
+esp_err_t _http_mp3_event_handler(esp_http_client_event_t *evt) {
+    static FILE *file = NULL;
+    static int total_bytes_received = 0;
+
+    switch (evt->event_id) {
+    case HTTP_EVENT_ON_DATA:
+        if (!esp_http_client_is_chunked_response(evt->client)) {
+            if (file == NULL) {
+                // 打开 SPIFFS 文件系统中的文件用于写入
+                file = fopen(AUDIO_FILE_PATH, "wb");
+                if (!file) {
+                    ESP_LOGE(TAG, "Failed to open file for writing");
+                    return ESP_FAIL;
+                }
+            }
+            // 将接收到的音频块写入文件
+            size_t written = fwrite(evt->data, 1, evt->data_len, file);
+            if (written != evt->data_len) {
+                ESP_LOGE(TAG, "File write failed");
+                fclose(file);
+                return ESP_FAIL;
+            }
+            total_bytes_received += evt->data_len;
+            // ESP_LOGI(TAG, "Received and wrote %d bytes, total %d", evt->data_len, total_bytes_received);
+        }
+        break;
+    case HTTP_EVENT_ON_FINISH:
+        // 完成时关闭文件
+        if (file != NULL) {
+            fclose(file);
+            ESP_LOGI(TAG, "File successfully written, total size: %d bytes", total_bytes_received);
+            file = NULL;
+            total_bytes_received = 0;
+        }
+
+        break;
+    default:
+        break;
+    }
+    return ESP_OK;
+}
+
+void download_and_play_mp3() {
+    esp_http_client_config_t config = {
+        .url = "http://192.168.71.83:5000/get_mp3",
+        .event_handler = _http_mp3_event_handler,
+        .timeout_ms = 20000
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    esp_err_t err = esp_http_client_perform(client);
+
+    audio_play_task(AUDIO_FILE_PATH);
+
+        err = unlink(AUDIO_FILE_PATH);
+    if (err == 0) {
+        ESP_LOGI("File Delete", "Successfully deleted %s", AUDIO_FILE_PATH);
+    } else {
+        ESP_LOGE("File Delete", "Failed to delete %s", AUDIO_FILE_PATH);
+    }
+
+    esp_http_client_cleanup(client);
+}
 
 esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
     static char buffer[MAX_HTTP_OUTPUT_BUFFER];
@@ -91,7 +156,7 @@ void validate_post_data(esp_http_client_handle_t client) {
 // 发送音频数据到服务器
 void send_audio_data(uint8_t *audio, int audio_len) {
     esp_http_client_config_t config = {
-        .url = "http://192.168.71.80:5000/upload",
+        .url = "http://192.168.71.83:5000/upload",
         .event_handler = _http_event_handler,
         .timeout_ms = 10000 // 设置超时为 10 秒
     };
@@ -134,45 +199,39 @@ void wait_for_response(const char *url, int timeout_ms) {
 }
 
 /* program flow. This function is called in app_audio.c */
-esp_err_t start_answer(uint8_t *audio, int audio_len)
-{
+esp_err_t start_answer(uint8_t *audio, int audio_len) {
     esp_err_t ret = ESP_OK;
 
-    // ui_ctrl_show_panel(UI_CTRL_PANEL_GET, 0);
-
-    // // UI listen success
-    // ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_QUESTION, "介绍一下你自己");
-    // // ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, "Answer");
-
-    // ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_CONTENT, "如果您不记得某个特定的国际规则、国际贸易实践或者是其他细节，通常可以通过以下步骤来获取信息：1. **回顾相关领域**：如果该信息与你的日常生活或者专业领域相关，你可能曾在学习或工作中接触过。2. **查找权威资料**：例如教科书、学术论文、官方文件等。这些地方通常会包含较为全面和准确的国际 规则信息。3. **咨询专业人士**：如果你是学生或者在职的专业人士，可以向你的老师、导师或者同行请教。请根据具体情境选择合适的方法获取所需信息。");
-    // ui_ctrl_show_panel(UI_CTRL_PANEL_REPLY, 0);
-
-    // 发送音频数据到服务器
     send_audio_data(audio, audio_len);
 
-    wait_for_response("http://192.168.71.80:5000/get_response", 10000);
+    wait_for_response("http://192.168.71.83:5000/get_response", 10000);
     ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_QUESTION, http_response);
 
-    wait_for_response("http://192.168.71.80:5000/get_response2", 20000);
+    wait_for_response("http://192.168.71.83:5000/get_response2", 20000);
     ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_CONTENT, http_response);
+
     ui_ctrl_show_panel(UI_CTRL_PANEL_REPLY, 0);
+
+    download_and_play_mp3();
+
+    // Wait a moment before starting to scroll the reply content
+    // vTaskDelay(pdMS_TO_TICKS(SCROLL_START_DELAY_S * 1000));
+    ui_ctrl_reply_set_audio_start_flag(true);
 
     return ret;
 }
 
 /* play audio function */
 
-static void audio_play_finish_cb(void)
-{
+static void audio_play_finish_cb(void) {
     ESP_LOGI(TAG, "replay audio end");
     if (ui_ctrl_reply_get_audio_start_flag()) {
         ui_ctrl_reply_set_audio_end_flag(true);
     }
 }
 
-void app_main()
-{
-    //Initialize NVS
+void app_main() {
+    // Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -185,14 +244,12 @@ void app_main()
     bsp_spiffs_mount();
     bsp_i2c_init();
 
-    bsp_display_cfg_t cfg = {
-        .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
-        .buffer_size = BSP_LCD_H_RES * CONFIG_BSP_LCD_DRAW_BUF_HEIGHT,
-        .double_buffer = 0,
-        .flags = {
-            .buff_dma = true,
-        }
-    };
+    bsp_display_cfg_t cfg = {.lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
+                             .buffer_size = BSP_LCD_H_RES * CONFIG_BSP_LCD_DRAW_BUF_HEIGHT,
+                             .double_buffer = 0,
+                             .flags = {
+                                 .buff_dma = true,
+                             }};
     bsp_display_start_with_config(&cfg);
     bsp_board_init();
 
@@ -208,8 +265,7 @@ void app_main()
     while (true) {
 
         ESP_LOGD(TAG, "\tDescription\tInternal\tSPIRAM");
-        ESP_LOGD(TAG, "Current Free Memory\t%d\t\t%d",
-                 heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
+        ESP_LOGD(TAG, "Current Free Memory\t%d\t\t%d", heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
                  heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         ESP_LOGD(TAG, "Min. Ever Free Size\t%d\t\t%d",
                  heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),

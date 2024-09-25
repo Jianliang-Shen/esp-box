@@ -312,7 +312,7 @@ void sr_handler_task(void *pvParam)
         if (ESP_MN_STATE_TIMEOUT == result.state) {
             ESP_LOGI(TAG, "ESP_MN_STATE_TIMEOUT");
             audio_record_stop();
-            FILE *fp = fopen("/spiffs/waitPlease.mp3", "r");
+            FILE *fp = fopen("/spiffs/ok.mp3", "r");
             if (fp) {
                 audio_player_play(fp);
             }
@@ -336,7 +336,7 @@ void sr_handler_task(void *pvParam)
         if (ESP_MN_STATE_DETECTED & result.state) {
             ESP_LOGI(TAG, "STOP:%d", result.command_id);
             audio_record_stop();
-            audio_play_task("/spiffs/echo_en_ok.wav");
+            audio_play_task("/spiffs/echo_cn_ok.wav");
             //How to stop the transmission, when start_answer begins.
             continue;
         }
